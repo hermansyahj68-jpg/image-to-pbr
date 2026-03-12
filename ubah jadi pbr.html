@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBR Texture Pack Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #e0e0e0; text-align: center; padding: 20px; }
+        .container { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; max-width: 1000px; margin: 20px auto; }
+        .card { background: #1e1e1e; padding: 15px; border-radius: 12px; border: 1px solid #333; }
+        canvas { width: 100%; height: auto; border-radius: 8px; background: #000; }
+        h3 { font-size: 14px; margin-bottom: 10px; color: #00ff88; }
+        
+        .controls { background: #252525; padding: 20px; border-radius: 15px; display: inline-block; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        input[type="file"] { margin-bottom: 15px; }
+        
+        .btn-zip { 
+            background: #007bff; color: white; border: none; padding: 12px 25px; 
+            border-radius: 30px; cursor: pointer; font-weight: bold; font-size: 16px;
+            transition: 0.3s; display: none; /* Muncul setelah upload */
+        }
+        .btn-zip:hover { background: #0056b3; transform: scale(1.05); }
+        .loading-text { display: none; color: #ffcc00; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>PBR Texture Tool</h2>
+    
+    <div class="controls">
+        <input type="file" id="upload" accept="image/*"><br>
+        <button id="downloadZip" class="btn-zip">Download Semua sebagai .ZIP</button>
+        <div id="loading" class="loading-text">Sedang memproses ZIP...</div>
+    </div>
+
+    <div class="container">
+        <div class="card"><h3>thumb.jpg (Preview Warna)</h3><canvas id="thumbCanvas"></canvas></div>
+        <div class="card"><h3>color.jpg (Albedo Asli)</h3><canvas id="colorCanvas"></canvas></div>
+        <div class="card"><h3>bmp.jpg (Height Map)</h3><canvas id="heightCanvas"></canvas></div>
+        <div class="card"><h3>normal.jpg</h3><canvas id="normalCanvas"></canvas></div>
+    </div>
+
+    <script>
+        const upload = document.getElementById('upload');
+        const btnZip = document.getElementById('downloadZip');
+        const loading = document.getElementById('loading');
+        
+        // Pemetaan nama file ke elemen canvas
+        const canvases = {
+            "thumb.jpg": document.getElementById('thumbCanvas'),
+            "color.jpg": document.getElementById('colorCanvas'),
+            "bmp.jpg": document.getElementById('heightCanvas'),
+            "normal.jpg": document.getElementById('normalCanvas')
+        };
+
+        upload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    processPBR(img);
+                    btnZip.style.display = 'inline-block'; // Tampilkan tombol download
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function processPBR(img) {
+            const size = 512; // Ukuran target seragam
+            const ctxs = {};
+            
+            // Inisialisasi semua canvas
+            for (let name in canvases) {
+                canvases[name].width = size;
+                canvases[name].height = size;
+                ctxs[name] = canvases[name].getContext('2d');
+            }
+
+            // 1. Gambar Warna Asli (thumb.jpg dan color.jpg)
+            ctxs["thumb.jpg"].drawImage(img, 0, 0, size, size);
+            ctxs["color.jpg"].drawImage(img, 0, 0, size, size);
+
+            // Ambil data pixel dari warna asli untuk memproses map lainnya
+            const imgData = ctxs["color.jpg"].getImageData(0, 0, size, size);
+            const data = imgData.data;
+
+            // 2. Buat Height Map (bmp.jpg) - Versi Grayscale
+            const heightData = ctxs["bmp.jpg"].createImageData(size, size);
+            for (let i = 0; i < data.length; i += 4) {
+                // Menghitung rata-rata (grayscale) sederhana
+                let v = (data[i] + data[i+1] + data[i+2]) / 3;
+                heightData.data[i] = heightData.data[i+1] = heightData.data[i+2] = v;
+                heightData.data[i+3] = 255; // Alpha
+            }
+            ctxs["bmp.jpg"].putImageData(heightData, 0, 0);
+
+            // 3. Buat Normal Map (normal.jpg)
+            const normalData = ctxs["normal.jpg"].createImageData(size, size);
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    let i = (y * size + x) * 4;
+                    
+                    // Deteksi tepi sederhana (Sobel-like)
+                    let xL = (x>0) ? data[((y*size+(x-1))*4)] : data[i];
+                    let xR = (x<size-1) ? data[((y*size+(x+1))*4)] : data[i];
+                    let yU = (y>0) ? data[(((y-1)*size+x)*4)] : data[i];
+                    let yD = (y<size-1) ? data[(((y+1)*size+x)*4)] : data[i];
+                    
+                    // Hitung kemiringan X dan Y, petakan ke R dan G
+                    normalData.data[i] = (xL - xR) + 128;   // Komponen Merah
+                    normalData.data[i+1] = (yU - yD) + 128; // Komponen Hijau
+                    normalData.data[i+2] = 255;             // Komponen Biru (dominan)
+                    normalData.data[i+3] = 255;             // Alpha
+                }
+            }
+            ctxs["normal.jpg"].putImageData(normalData, 0, 0);
+        }
+
+        // FUNGSI UNTUK MEMBUAT DAN MENGUNDUH ZIP
+        btnZip.addEventListener('click', async () => {
+            loading.style.display = 'block';
+            btnZip.disabled = true; // Matikan tombol saat proses
+            const zip = new JSZip();
+            
+            // Loop semua canvas dan masukkan datanya ke dalam ZIP
+            for (let name in canvases) {
+                // Ubah canvas menjadi data URL (JPG kualitas 90%)
+                const dataUrl = canvases[name].toDataURL('image/jpeg', 0.9);
+                // Ekstrak data base64 murni
+                const base64Data = dataUrl.split(',')[1];
+                // Tambahkan ke ZIP dengan nama file yang sesuai
+                zip.file(name, base64Data, {base64: true});
+            }
+
+            try {
+                // Generate file ZIP
+                const content = await zip.generateAsync({type: "blob"});
+                // Buat link download sementara
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = "PBR_Textures_Pack.zip";
+                link.click(); // Pemicu download otomatis
+            } catch (error) {
+                alert("Gagal membuat file ZIP.");
+            }
+            
+            loading.style.display = 'none';
+            btnZip.disabled = false;
+        });
+    </script>
+</body>
+</html>
